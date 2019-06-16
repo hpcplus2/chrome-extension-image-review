@@ -1,8 +1,35 @@
-const COMMAND_TYPE = {
-    TRAVELS: 'travels',
-};
+let toolBoxInstance = null;
+
+const constants = {
+    prefix: 'hpcherry',
+
+    /*
+     * chrome extension request type
+     */
+    COMMAND_TYPE: {
+        TRAVELS: 'travels',
+    },
+
+    /** 
+     * element selector name
+     */
+    selector: {
+        Container: '.hpcherry',
+        ToolBox: '.hpcherry-box',
+        BoxContent: '.J_hpcherry_boxContent',
+        COPY: '.J_hpcherry_copy',
+        CLEAR: '.J_hpcherry_clear',
+        SETTING: '.J_hpcherry_setting',
+        ReviewPage: '.J_hpcherry_reviewPage',
+        WARNING: '.J_hpcherry_warning',
+    }
+}
 
 const Utils = {
+    /** 
+     * byte unit format function
+     * @params {number} bytes 
+     */
     formatByteUnit: (bytes) => {
         const unitArr = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
         bytes = parseFloat(bytes);
@@ -10,122 +37,324 @@ const Utils = {
         const size = (bytes / Math.pow(1024, index)).toFixed(2);
         return size + unitArr[index];
     },
+    /** 
+     * get the file name by parse url 
+     */
     getFileName: (url) => {
         if (!url) { return ''; }
         let lastStr = url.split('/');
         lastStr = lastStr[lastStr.length - 1];
         return lastStr.split('?')[0];
     },
-}
 
-const createDisplayBox = (imgUrl, size = {}, originSize = {}, fileName = 'pic.jpg', blobSize = '未知') => {
-    const tpl = `
-        <p class="u-tlt">图片审查工具</p>
-        <div class="m-content">
-            <p class="u-sub-tlt">原始尺寸</p>
-            <p class="u-data">${originSize.naturalWidth}&nbsp;x&nbsp;${originSize.naturalHeight}</p>
-        </div>
-        <div class="m-content">
-            <p class="u-sub-tlt">当前尺寸</p>
-            <p class="u-data">${size.width}&nbsp;x&nbsp;${size.height}</p>
-        </div>
-        <div class="m-content">
-            <p class="u-sub-tlt">图片体积</p>
-            <p class="u-data">${blobSize}</p>
-        </div>
-        <div class="m-content">
-            <a href="javascript:;" class="u-btn J_hpcherry_copy" data-url="${imgUrl}">复制链接</a>
-            <a href="${imgUrl}" class="u-btn" download="${fileName}">下载图片</a>
-        </div>
-    `;
-    if (!$('.hpcherry-box').length) {
-        const dom = document.createElement('div');
-        dom.className = 'hpcherry-box';
-        $(dom).html(tpl);
-        document.body.appendChild(dom);
-    } else {
-        $('.hpcherry-box').html(tpl);
+    /** 
+     * remove class selector prefix
+     */
+    getClassName: (selector) => {
+        return selector ? selector.replace('.', '') : '';
     }
 }
 
-const removeListens = () => {
-    const $container = $('.hpcherry');
+class ReviewToolsBox {
+    /**
+     * review tool's mode
+     */
+    static ReviewMode = {
+        SINGLE: 1,      // review a single image
+        ALL: 2          // review all images on the page
+    }
 
-    $container.off('click', 'img');
+    /**  
+     * review tools box display type
+     */
+    static TPL_TYPE = {
+        INIT: 0,        // init page
+        SINGLE: 1,      // single image information display page
+        ALL: 2,         // review result information display page (for all images)
+    }
 
-    $container.off('click', '.J_hpcherry_copy');
+    /** 
+     * review page error type
+     */
+    static WARNING_TYPE = {
+        PROPORTION: 1,   // proportion error
+        SIZE: 2,         // exceeded size error
+    }
 
-    $container.off('click', '.J_hpcherry_download');
-}
+    reviewMode = ReviewToolsBox.ReviewMode.SINGLE;
 
-const listens = () => {
-    const $container = $('.hpcherry');
+    proportionErrorList = [];
 
-    $container.on('click', 'img', function() {
-        const target = $(this);
-        const imageUrl = this.src;
-        const width = target.width();
-        const height = target.height();
-        const naturalWidth = this.naturalWidth;
-        const naturalHeight = this.naturalHeight;
+    excessiveList = [];
 
-        var blob = null;
-        var xhr = new XMLHttpRequest(); 
-        xhr.open('GET', imageUrl, true);
-        xhr.responseType = 'blob';
-        xhr.onload = () => {
-            blob = xhr.response;
-            createDisplayBox(
-                imageUrl,
-                { width, height }, 
-                { naturalWidth, naturalHeight }, 
-                Utils.getFileName(imageUrl),
-                Utils.formatByteUnit(blob.size));
+    /** 
+     * init image review tool box
+     */
+    init = () => {
+        const tpl = this.renderTpl(ReviewToolsBox.TPL_TYPE.INIT)(true);
+        const dom = document.createElement('div');
+        dom.className = Utils.getClassName(constants.selector.ToolBox);
+        $(dom).html(tpl);
+        document.body.appendChild(dom);
+
+        this.listens();
+    }
+
+    /** 
+     * reset image review tool box
+     */
+    reset = () => {
+        this.clearWarning();
+
+        if (this.reviewMode !== ReviewToolsBox.ReviewMode.SINGLE) {
+            this.reviewMode = ReviewToolsBox.ReviewMode.SINGLE;
         }
-        xhr.send();
-        return false;
-    })
+        const tpl = this.renderTpl(ReviewToolsBox.TPL_TYPE.INIT)();
+        this.changeBoxContent(tpl);
+    }
+    
+     /** 
+     * destory image review tool box
+     */
+    remove = () => {
+        this.clearWarning();
 
-    $container.on('click', '.J_hpcherry_copy', function() {
-        const copyText = $(this).attr('data-url');
+        this.removeAllListeners();
 
-        const input = document.createElement('input');
-        document.body.appendChild(input);
-        input.setAttribute('value', copyText);
-        input.select();
-        if (document.execCommand('cut')) {
-            document.execCommand('cut');
+        $(constants.selector.ToolBox).remove();
+    }
+
+    /**
+     * remove the warning wrap of images
+     */
+    clearWarning = () => {
+        const $imgs = $(`${constants.selector.WARNING} img`);
+        if (!!$imgs.length) {
+            $imgs.unwrap();
+            this.proportionErrorList = [];
+            this.excessiveList = [];
         }
-        document.body.removeChild(input);
-    })
-}
+    }
 
-const mark = () => {
-    $('body').addClass('hpcherry');
+    /** 
+     * listen for click events from review tools box
+     */
+    listens = () => {
+        const $container = $(constants.selector.Container);
+        const self = this;
+        $container.on('click', 'img', function() {
+            if (self.reviewMode !== ReviewToolsBox.ReviewMode.SINGLE) return
 
-    listens();
-}
+            const target = $(this);
+            const imageUrl = this.src;
+            const width = target.width();
+            const height = target.height();
+            const naturalWidth = this.naturalWidth;
+            const naturalHeight = this.naturalHeight;
 
-const reset = () => {
-    removeListens();
+            let blob = null;
+            let xhr = new XMLHttpRequest(); 
+            xhr.open('GET', imageUrl, true);
+            xhr.responseType = 'blob';
+            xhr.onload = () => {
+                blob = xhr.response;
+                self.singleImgDetail(
+                    imageUrl,
+                    { width, height }, 
+                    { naturalWidth, naturalHeight }, 
+                    Utils.getFileName(imageUrl),
+                    Utils.formatByteUnit(blob.size));
+            }
+            xhr.send();
+            return false;
+        })
 
-    $('.hpcherry-box').remove();
+        $container.on('click', constants.selector.COPY, function() {
+            const copyText = $(this).attr('data-url');
 
-    $('body').removeClass('hpcherry');
+            const input = document.createElement('input');
+            document.body.appendChild(input);
+            input.setAttribute('value', copyText);
+            input.select();
+            if (document.execCommand('cut')) {
+                document.execCommand('cut');
+            }
+            document.body.removeChild(input);
+        })
+
+        $container.on('click', constants.selector.CLEAR, function() {
+            self.reset();
+        })
+
+        $container.on('click', constants.selector.SETTING, function() {
+            // TODO jump to option page
+            console.log('跳转配置页面')
+        })
+
+        $container.on('click', constants.selector.ReviewPage, function() {
+            self.reviewMode = ReviewToolsBox.ReviewMode.ALL;
+            self.reviewPage();
+        })
+    }
+
+    removeAllListeners = () => {
+        $(constants.selector.Container).off('click');
+    }
+
+    changeBoxContent = (tpl) => {
+        $(constants.selector.BoxContent).empty().html(tpl);
+    }
+
+    /** 
+     * display single image detail info
+     */
+    singleImgDetail = (imgUrl, size = {}, originSize = {}, fileName = 'pic.jpg', blobSize = '未知') => {
+        const tpl = this.renderTpl(ReviewToolsBox.TPL_TYPE.SINGLE)(imgUrl, size, originSize, fileName, blobSize);
+        this.changeBoxContent(tpl);
+    }
+
+    /**  
+     * check all images on the page
+     */
+    reviewPage = () => {
+        this.proportionErrorList = [];
+        this.excessiveList = [];
+        $(`${constants.selector.Container} img`).each((_i, _img) => {
+            const $img = $(_img);
+            const width = $img.width();
+            const height = $img.height();
+            const naturalWidth = _img.naturalWidth;
+            const naturalHeight = _img.naturalHeight;
+            // exclude unloaded images
+            if (!!width && !!height && !!naturalWidth && !!naturalHeight && naturalWidth !== 1 && naturalHeight !== 1) {
+                const ratio = width / height;
+                const naturalRatio = naturalWidth / naturalHeight;
+                if (ratio !== naturalRatio || width > naturalWidth || height > naturalHeight) {
+                    // console.log(_img, width, height, naturalWidth, naturalHeight)
+                    this.proportionErrorList.push($img);
+                    $img.wrap(this.warningWrap(ReviewToolsBox.WARNING_TYPE.PROPORTION));
+                }
+            }
+        });
+        const tpl = this.renderTpl(ReviewToolsBox.TPL_TYPE.ALL)(this.proportionErrorList.length);
+        this.changeBoxContent(tpl);
+    }
+
+    renderTpl = (tplType) => {
+        const classPrefix = constants.prefix;
+        const selectors = constants.selector;
+        let renderFunction;
+        switch (tplType) {
+            case ReviewToolsBox.TPL_TYPE.SINGLE:
+                renderFunction = (imgUrl, size, originSize, fileName, blobSize) => {
+                    const tpl = `
+                        <div class="m-${classPrefix}-block">
+                            <p class="u-${classPrefix}-subTlt">原始尺寸</p>
+                            <p class="u-${classPrefix}-data">${originSize.naturalWidth}&nbsp;x&nbsp;${originSize.naturalHeight}</p>
+                        </div>
+                        <div class="m-${classPrefix}-block">
+                            <p class="u-${classPrefix}-subTlt">当前尺寸</p>
+                            <p class="u-${classPrefix}-data">${size.width}&nbsp;x&nbsp;${size.height}</p>
+                        </div>
+                        <div class="m-${classPrefix}-block">
+                            <p class="u-${classPrefix}-subTlt">图片体积</p>
+                            <p class="u-${classPrefix}-data">${blobSize}</p>
+                        </div>
+                        <div class="m-${classPrefix}-block">
+                            <a href="javascript:;" class="u-${classPrefix}-btn ${Utils.getClassName(selectors.COPY)}" data-url="${imgUrl}">复制链接</a>
+                            <a href="${imgUrl}" class="u-${classPrefix}-btn" download="${fileName}" target="_blank">下载图片</a>
+                        </div>
+                        <a href="javascript:;" class="u-${classPrefix}-clear ${Utils.getClassName(selectors.CLEAR)}"></a>
+                    `;
+                    return tpl;
+                }
+                break;
+            case ReviewToolsBox.TPL_TYPE.ALL:
+                renderFunction = (n1 = 0, n2 = 0) => {
+                    const tpl = `
+                        <div class="m-${classPrefix}-block">
+                            <p class="u-${classPrefix}-subTlt">页面审查结果</p>
+                        </div>
+                        <div class="m-${classPrefix}-resultBlock">
+                            <p class="u-${classPrefix}-result">比例错误: ${n1}张图片</p>
+                            <p class="u-${classPrefix}-result">体积过大: ${n2}张图片</p>
+                        </div>
+                        <div class="m-${classPrefix}-block">
+                            <p class="u-${classPrefix}-tips">*注：错误图片会蒙上一层遮罩</p>
+                        </div>
+                        <a href="javascript:;" class="u-${classPrefix}-clear ${Utils.getClassName(selectors.CLEAR)}"></a>
+                    `;
+                    return tpl;
+                }
+                break;
+            case ReviewToolsBox.TPL_TYPE.INIT:
+            default:
+                renderFunction = (initStruct = false) => {
+                    const tpl = `
+                        ${initStruct ? 
+                            `<div class="u-${classPrefix}-tlt">图片审查工具</div>
+                                <div class="m-${classPrefix}-content ${Utils.getClassName(selectors.BoxContent)}">
+                            ` 
+                            : ''
+                        }
+                            <div class="m-${classPrefix}-block">
+                                <p class="u-${classPrefix}-placeholder">图片审查功能已开启，<span class="f-${classPrefix}-hightlight">点击页面内的图片</span>可获得图片基本信息(宽高、体积)</p>
+                            </div>
+                            <div class="m-${classPrefix}-block">
+                                <button class="u-${classPrefix}-reviewBtn ${Utils.getClassName(selectors.ReviewPage)}">全局审查</button>
+                            </div>
+                            <a class="u-${classPrefix}-setting ${Utils.getClassName(selectors.SETTING)}">配置</a>
+                        ${initStruct ? `</div>` : ''}
+                    `;
+                    return tpl;
+                }
+        }
+        return renderFunction;
+    }
+
+    /*
+     * review result wrap
+     */
+    warningWrap = (warningType) => {
+        const classPrefix = constants.prefix;
+        const selectors = constants.selector;
+        let errorClass = 'f-proportion-error';
+        switch (warningType) {
+            case ReviewToolsBox.WARNING_TYPE.PROPORTION:
+                errorClass = 'f-proportion-error';
+                break;
+            case ReviewToolsBox.WARNING_TYPE.SIZE:
+                errorClass = 'f-size-error';
+                break;
+            default:
+        }
+        const tpl = `<div class="m-${classPrefix}-warning-wrap ${errorClass} ${Utils.getClassName(selectors.WARNING)}"></div>`
+        return tpl;
+    }
 }
 
 const launch = () => {
-    if ($('body').hasClass('hpcherry')) {
-        reset();
-    } else {
-        mark();
+    $('body').addClass(Utils.getClassName(constants.selector.Container));
+    toolBoxInstance = new ReviewToolsBox();
+    toolBoxInstance.init();
+}
+
+const reset = () => {
+    if (toolBoxInstance) {
+        toolBoxInstance.remove();
+        toolBoxInstance = null;
     }
+    $('body').removeClass(Utils.getClassName(constants.selector.Container));
 }
 
 chrome.runtime.onMessage.addListener(
-    function(request, sender, sendResponse) {
-        if (request && request.type === COMMAND_TYPE.TRAVELS) {
-            launch();
+    function(request) {
+        if (request && request.type === constants.COMMAND_TYPE.TRAVELS) {
+            if ($('body').hasClass(Utils.getClassName(constants.selector.Container))) {
+                reset();
+            } else {
+                launch();
+            }
         }
     }
 );
