@@ -1,7 +1,7 @@
 {
   "name": "Image Review",
   "description" : "审查图片属性",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "manifest_version": 2,
   "permissions": [
     "<all_urls>",
