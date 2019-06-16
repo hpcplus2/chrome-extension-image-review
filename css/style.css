@@ -160,7 +160,7 @@
 }
 
 .f-size-error:after {
-    content: "图片体积过大";
+    content: "图片宽高不正确";
 }
 
 .f-hpcherry-hightlight {

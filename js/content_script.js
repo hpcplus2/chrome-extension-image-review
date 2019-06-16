@@ -22,7 +22,11 @@ const constants = {
         SETTING: '.J_hpcherry_setting',
         ReviewPage: '.J_hpcherry_reviewPage',
         WARNING: '.J_hpcherry_warning',
-    }
+    },
+
+    MAX_OFFSET_PROPORTION: 1,
+
+    MAX_OFFSET_VALUE: 0,
 }
 
 const Utils = {
@@ -52,7 +56,14 @@ const Utils = {
      */
     getClassName: (selector) => {
         return selector ? selector.replace('.', '') : '';
-    }
+    },
+
+    /** 
+     * calculate width and height proportion
+     */
+    calcProportion: (w, h) => {
+        return Math.round(w / h * 10000) / 100;
+    },
 }
 
 class ReviewToolsBox {
@@ -78,14 +89,14 @@ class ReviewToolsBox {
      */
     static WARNING_TYPE = {
         PROPORTION: 1,   // proportion error
-        SIZE: 2,         // exceeded size error
+        SIZE: 2,         // size error
     }
 
     reviewMode = ReviewToolsBox.ReviewMode.SINGLE;
 
     proportionErrorList = [];
 
-    excessiveList = [];
+    sizeErrorList = [];
 
     /** 
      * init image review tool box
@@ -132,7 +143,7 @@ class ReviewToolsBox {
         if (!!$imgs.length) {
             $imgs.unwrap();
             this.proportionErrorList = [];
-            this.excessiveList = [];
+            this.sizeErrorList = [];
         }
     }
 
@@ -218,7 +229,7 @@ class ReviewToolsBox {
      */
     reviewPage = () => {
         this.proportionErrorList = [];
-        this.excessiveList = [];
+        this.sizeErrorList = [];
         $(`${constants.selector.Container} img`).each((_i, _img) => {
             const $img = $(_img);
             const width = $img.width();
@@ -227,19 +238,25 @@ class ReviewToolsBox {
             const naturalHeight = _img.naturalHeight;
             // exclude unloaded images
             if (!!width && !!height && !!naturalWidth && !!naturalHeight && naturalWidth !== 1 && naturalHeight !== 1) {
-                const ratio = width / height;
-                const naturalRatio = naturalWidth / naturalHeight;
-                if (ratio !== naturalRatio || width > naturalWidth || height > naturalHeight) {
-                    // console.log(_img, width, height, naturalWidth, naturalHeight)
+                if (!this.judgeProportion(width, height, naturalWidth, naturalHeight)) {
                     this.proportionErrorList.push($img);
                     $img.wrap(this.warningWrap(ReviewToolsBox.WARNING_TYPE.PROPORTION));
+                } else if (!this.judgeSize(width, height, naturalWidth, naturalHeight)) {
+                    this.sizeErrorList.push($img);
+                    $img.wrap(this.warningWrap(ReviewToolsBox.WARNING_TYPE.SIZE));
+                } else {
+                    // nothing
                 }
             }
         });
-        const tpl = this.renderTpl(ReviewToolsBox.TPL_TYPE.ALL)(this.proportionErrorList.length);
+        const tpl = this.renderTpl(ReviewToolsBox.TPL_TYPE.ALL)(this.proportionErrorList.length, this.sizeErrorList.length);
         this.changeBoxContent(tpl);
     }
 
+    /*
+     * @params {TPL_TYPE} tplType
+     * @return {Function} generate html function
+     */
     renderTpl = (tplType) => {
         const classPrefix = constants.prefix;
         const selectors = constants.selector;
@@ -277,7 +294,7 @@ class ReviewToolsBox {
                         </div>
                         <div class="m-${classPrefix}-resultBlock">
                             <p class="u-${classPrefix}-result">比例错误: ${n1}张图片</p>
-                            <p class="u-${classPrefix}-result">体积过大: ${n2}张图片</p>
+                            <p class="u-${classPrefix}-result">宽高错误: ${n2}张图片</p>
                         </div>
                         <div class="m-${classPrefix}-block">
                             <p class="u-${classPrefix}-tips">*注：错误图片会蒙上一层遮罩</p>
@@ -313,12 +330,13 @@ class ReviewToolsBox {
     }
 
     /*
-     * review result wrap
+     * @params {WARNING_TYPE} warningType
+     * @return {string} warning wrap element
      */
     warningWrap = (warningType) => {
         const classPrefix = constants.prefix;
         const selectors = constants.selector;
-        let errorClass = 'f-proportion-error';
+        let errorClass = '';
         switch (warningType) {
             case ReviewToolsBox.WARNING_TYPE.PROPORTION:
                 errorClass = 'f-proportion-error';
@@ -330,6 +348,33 @@ class ReviewToolsBox {
         }
         const tpl = `<div class="m-${classPrefix}-warning-wrap ${errorClass} ${Utils.getClassName(selectors.WARNING)}"></div>`
         return tpl;
+    }
+
+    /**
+     * @params {number} width
+     * @params {number} height
+     * @params {number} naturalWidth
+     * @params {number} naturalHeight
+     * @return {boolean} whether the image's proportion is right
+     */
+    judgeProportion = (width, height, naturalWidth, naturalHeight) => {
+        const displayProportion = Utils.calcProportion(width, height);
+        const naturalProportion = Utils.calcProportion(naturalWidth, naturalHeight);
+        const leftProportion =  Math.abs(Number(displayProportion - naturalProportion).toFixed(2));
+        return !(leftProportion > constants.MAX_OFFSET_PROPORTION);
+    }
+
+    /**
+     * @params {number} width
+     * @params {number} height
+     * @params {number} naturalWidth
+     * @params {number} naturalHeight
+     * @return {boolean} whether the deviation of the width and height of the image is within the expected
+     */
+    judgeSize = (width, height, naturalWidth, naturalHeight) => {
+        const leftWidth = Math.ceil(Math.abs(naturalWidth - width));
+        const leftHeight = Math.ceil(Math.abs(naturalHeight - height));
+        return !(leftWidth > constants.MAX_OFFSET_VALUE || leftHeight > constants.MAX_OFFSET_VALUE);
     }
 }
 
